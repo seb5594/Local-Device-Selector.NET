@@ -11,7 +11,7 @@ Using the ARP-Protocol, LDS is able to retrieve the IP-/ & MAC-Address of any lo
 # What informations can be obtained?
 • IPv4-Address
 • MAC-Address
-• Device Vendor (LookUp API provided by macvendorlookup.com)
+• Device Vendor (OUI LookUp API provided by macvendorlookup.com)
 • DNS Hostname
 • Availability
 
