@@ -2,4 +2,3 @@ c:\users\anonymous\documents\visual studio 2015\Projects\Local-Device-Selector.N
 c:\users\anonymous\documents\visual studio 2015\Projects\Local-Device-Selector.NET Example App\Local-Device-Selector.NET\bin\Debug\Local-Device-Selector.NET.pdb
 c:\users\anonymous\documents\visual studio 2015\Projects\Local-Device-Selector.NET Example App\Local-Device-Selector.NET\obj\Debug\Local-Device-Selector.NET.dll
 c:\users\anonymous\documents\visual studio 2015\Projects\Local-Device-Selector.NET Example App\Local-Device-Selector.NET\obj\Debug\Local-Device-Selector.NET.pdb
-c:\users\anonymous\documents\visual studio 2015\Projects\Local-Device-Selector.NET Example App\Local-Device-Selector.NET\obj\Debug\Local-Device-Selector.NET.csprojResolveAssemblyReference.cache

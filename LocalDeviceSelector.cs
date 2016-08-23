@@ -7,6 +7,10 @@ using System.Threading.Tasks;
 using System.Data;
 using System.Windows.Forms;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Remoting.Messaging;
+using System.Threading;
+using System.Net.NetworkInformation;
 
 namespace Local_Device_Selector.NET
 {
@@ -16,34 +20,29 @@ namespace Local_Device_Selector.NET
             obj is String ? String.IsNullOrEmpty(obj as String) : obj == null;
 
         public static Boolean IsHexString(this String hexStr) =>
-            hexStr.Select(c => c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' || c >= '0' && c <= '9').All(isHexChar => isHexChar);
+            hexStr.All(c => c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' || c >= '0' && c <= '9');
     }
 
     internal class LocalDeviceInfo
     {
         public readonly String ipAddress, macAddress;
-        public readonly Boolean IsAvailable;
+        public Boolean IsAvailable { get; private set; }
+        protected Boolean? IsSynchronized = null;
 
-        protected String hostName;
+        public String HostName { get; private set; }
+        public String Vendor { get; private set; }
 
-        public String HostName
+        public async Task<LocalDeviceInfo> RunProcessAsync(LocalDeviceInfo ldi)
         {
-            get
-            {
-                if (hostName.IsNull())
-                {
-                    try
-                    {
-                        // Retrieve the "Host Name" for this IP Address. This is the "Name" of the machine.
-                        hostName = System.Net.Dns.GetHostEntry(ipAddress).HostName;
-                    }
-                    catch
-                    {
-                        hostName = "N/A";
-                    }
-                }
-                return hostName;
-            }
+            var _ldi = ldi.MemberwiseClone() as LocalDeviceInfo;
+            await ldi.ProcessAsync(_ldi);
+            return ldi;
+        }
+
+        private async Task ProcessAsync(LocalDeviceInfo ldi)
+        {
+            String dns = ldi.HostName;
+
         }
 
         public LocalDeviceInfo(String IPAddress, String MACAddress)
@@ -62,9 +61,15 @@ namespace Local_Device_Selector.NET
         public static Boolean operator ==(LocalDeviceInfo a, LocalDeviceInfo b) => EqualityComparer<LocalDeviceInfo>.Default.Equals(a, b);
         public static Boolean operator !=(LocalDeviceInfo a, LocalDeviceInfo b) => !(a == b);
 
+        public static Boolean IsSerialized() =>
+            deviceList.TrueForAll(i => !i.IsSynchronized.IsNull());
+
         public static List<LocalDeviceInfo> GetARP()
         {
-            deviceList = new List<LocalDeviceInfo>();
+            if (IsSerialized()) return deviceList;
+
+            var devList = new List<LocalDeviceInfo>();
+
             foreach (var arp in FetchARPTable().Split(new Char[] { '\n', '\r' }))
             {
                 //Parse out all the MAC / IP Address combinations
@@ -74,10 +79,41 @@ namespace Local_Device_Selector.NET
                                  where !part.IsNull()
                                  select part).ToArray();
 
-                    if (parts.Length == 3) deviceList.Add(new LocalDeviceInfo(parts[0], parts[1]));
+                    if (parts.Length == 3)
+                    {
+                        devList.Add(new LocalDeviceInfo(parts[0], parts[1]));
+
+                    }
                     //else throw new Exception("Could not parse ARP-Table...");
                 }
             }
+
+            if(devList != deviceList)
+            {
+                deviceList = devList;
+            }
+ 
+            return deviceList;
+        }
+
+        async public static Task<LocalDeviceInfo> SyncDeviceAsync(LocalDeviceInfo ldi)
+        {
+            if (ldi.IsSynchronized.IsNull())
+            {
+                ldi.HostName = System.Net.Dns.GetHostEntryAsync(ldi.ipAddress).GetAwaiter().GetResult().HostName;
+                ldi.Vendor = await getVendor(ldi.macAddress);
+
+                PingReply pr = await new Ping().SendPingAsync(ldi.ipAddress);
+                ldi.IsAvailable = pr.Status == IPStatus.Success;
+
+                ldi.IsSynchronized = !(ldi.HostName.IsNull() && ldi.Vendor.IsNull());
+            }
+            return ldi;
+        }
+
+        async public static Task<List<LocalDeviceInfo>> SyncTableAsync()
+        {
+            deviceList.ForEach(dev => SyncDeviceAsync(dev).GetAwaiter());
             return deviceList;
         }
 
@@ -104,7 +140,7 @@ namespace Local_Device_Selector.NET
             return res;
         }
 
-        public static LocalDeviceInfo GetDeviceInfoByMAC(String macAddress) => 
+        public static LocalDeviceInfo GetDeviceInfoByMAC(String macAddress) =>
             GetARP().Where(dev => dev.macAddress.ToLowerInvariant() == macAddress.ToLowerInvariant()).Select(dev => dev).FirstOrDefault();
 
         public static LocalDeviceInfo GetDeviceInfoByIP(String ipAddress) =>
@@ -120,9 +156,7 @@ namespace Local_Device_Selector.NET
             return index;
         }
 
-        
 
-        #endregion
 
         #region Mac-Address Lookup API
         /* *************************
@@ -149,9 +183,9 @@ namespace Local_Device_Selector.NET
          * 
          */
 
-        public String getVendor(String macAddress)
+        async protected static Task<String> getVendor(String macAddress)
         {
-            String mac = macAddress.Replace("-", "");
+            String mac = macAddress.Replace("-", "").ToLower();
 
             if (!mac.IsNull() && mac.Length < 6 && mac.IsHexString())
                 throw new FormatException("Exception occured in 'getVendor()'\n\nMAC-Address has a incorrect format!");
@@ -164,7 +198,7 @@ namespace Local_Device_Selector.NET
 
             try
             {
-                lookupResult = new System.Net.WebClient().DownloadString("http://www.macvendorlookup.com/api/v2/" + oui + "/pipe").Split('|');
+                lookupResult = new System.Net.WebClient().DownloadStringTaskAsync("http://www.macvendorlookup.com/api/v2/" + oui + "/pipe").GetAwaiter().GetResult().Split('|');
 
                 if (lookupResult.Count() != 10)
                     throw new Exception("macvendorlookup.com API Error");
@@ -173,11 +207,12 @@ namespace Local_Device_Selector.NET
             }
             catch (Exception e)
             {
-                //MessageBox.Show(e.ToString());
+                //handle api exception
             }
 
             return "Couldn't resolve device vendor";
         }
+        #endregion
         #endregion
     }
 
@@ -196,25 +231,45 @@ namespace Local_Device_Selector.NET
             }
         }
 
-        void Refresh()
+        async void RefreshDevices()
         {
             arpTable = LocalDeviceInfo.GetARP();
+
             Int32 tableCount = arpTable.Count;
             if (tableCount <= 0) MessageBox.Show("ARP-Table empty");
             else
             {
                 deviceLV.Items.Clear();
-                MessageBox.Show(arpTable.Count.ToString());
+                var tasks = new Task<LocalDeviceInfo>[tableCount];
+
+
                 for (var i = 0; i < tableCount; i++)
                 {
+                    //tasks[i] = Task.Factory.StartNew<LocalDeviceInfo>(() => LocalDeviceInfo.SyncDeviceAsync(arpTable[i]).GetAwaiter().GetResult());
+                    arpTable[i] = await LocalDeviceInfo.SyncDeviceAsync(arpTable[i]);
+
                     var items = new[]
                     {
-                    new ListViewItem.ListViewSubItem() { Text = arpTable[i].ipAddress, Tag = arpTable[i] },
-                    new ListViewItem.ListViewSubItem() { Text = arpTable[i].macAddress, Tag = arpTable[i] },
-                   // new ListViewItem.ListViewSubItem() { Text = arpTable[i].IsAvailable.ToString(), Tag = arpTable[i], ForeColor = arpTable[i].IsAvailable ? Color.LightGreen : Color.Red }
+                        new ListViewItem.ListViewSubItem()
+                        {
+                            Text = arpTable[i].ipAddress,
+                            Tag = arpTable[i]
+                        },
+                        new ListViewItem.ListViewSubItem()
+                        {
+                            Text = arpTable[i].macAddress,
+                            Tag = arpTable[i]
+                        },
+                        new ListViewItem.ListViewSubItem()
+                        {
+                            Text = arpTable[i].IsAvailable.ToString(),
+                            Tag = arpTable[i],
+                            ForeColor = arpTable[i].IsAvailable ? Color.LightGreen : Color.Red
+                        }
                     };
 
-                    deviceLV.Items.Add(i.ToString()).SubItems.AddRange(items);
+                    if (deviceLV.InvokeRequired) deviceLV.Invoke(new Action( ()=> deviceLV.Items.Add(i.ToString()).SubItems.AddRange(items)));
+                    else deviceLV.Items.Add(i.ToString()).SubItems.AddRange(items);
                 }
             }
         }
@@ -223,15 +278,49 @@ namespace Local_Device_Selector.NET
         {
 
         }
-        
-        void HandleButtonEvents(Object sender, dynamic e)
-        {
-            var btn = sender as Button;
 
-            if (btn == refreshBtn)
-                Refresh();
-            else if (btn == selectBtn)
+        void LoadFormEvent()
+        {
+            //refreshBtn.PerformClick();
+        }
+
+        private void ChangedDeviceListIndex()
+        {
+            /*var table = await LocalDeviceInfo.SyncTableAsync();
+
+            await Task.Run(() =>
+            {
+                SetSafeLabelText(vendorLbl, table[LVIndex].Vendor);
+                SetSafeLabelText(hostLbl, table[LVIndex].HostName);
+            });
+            */
+
+        }
+
+        private void SetSafeLabelText(Label lbl, String txt)
+        {
+            if (lbl.InvokeRequired)
+            {
+                lbl.Invoke(new Action(() => lbl.Text = txt));
+                return;
+            }
+            lbl.Text = txt;
+        }
+
+        private void HandleControlEvents(Object sender, dynamic e)
+        {
+            //MessageBox.Show(sender.ToString());
+
+            var obj = sender as Control;
+
+            if (obj == refreshBtn)
+                RefreshDevices();
+            else if (obj == selectBtn)
                 Select();
+            else if (obj == deviceLV)
+                ChangedDeviceListIndex();
+            else if (obj == this)
+                LoadFormEvent();
             else
                 throw new Exception("Unknown sender in 'HandleButtonEvent()'");
         }
@@ -242,9 +331,6 @@ namespace Local_Device_Selector.NET
         public DeviceSelector()
         {
             InitializeForm();
-
-            //virtual refresh btn click
-            refreshBtn.PerformClick();
         }
 
         protected override void Dispose(Boolean disposing)
@@ -348,8 +434,6 @@ namespace Local_Device_Selector.NET
                 Text = "Unknown",
                 Location = new Point(vendorLbl.Location.X, labels[0].Location.Y + 17)
             };
-
-
             refreshBtn = new Button()
             {
                 TabIndex = 0,
@@ -357,7 +441,6 @@ namespace Local_Device_Selector.NET
                 Size = new Size((Width / 2) - 17, 21),
                 Location = new Point(deviceLV.Location.X, deviceLV.Size.Height + 10)
             };
-
             selectBtn = new Button()
             {
                 TabIndex = 1,
@@ -365,7 +448,6 @@ namespace Local_Device_Selector.NET
                 Size = new Size(refreshBtn.Width, 21),
                 Location = new Point((Width / 2) - 4, refreshBtn.Location.Y)
             };
-
             box = new GroupBox()
             {
                 Text = "Current Selection",
@@ -374,9 +456,11 @@ namespace Local_Device_Selector.NET
             };
 
             //Setup form-controls events
-            var handler = new EventHandler(HandleButtonEvents);
+            var handler = new EventHandler(HandleControlEvents);
             refreshBtn.Click += handler;
             selectBtn.Click += handler;
+            Load += handler;
+            deviceLV.SelectedIndexChanged += handler;
 
             box.Controls.AddRange(labels);
             box.Controls.Add(vendorLbl);
